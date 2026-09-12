@@ -25,7 +25,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y chromium zip
 
-      - name: Checkout DeepWiki exporter
+      - name: Checkout DeepWiki exporter runtime
         run: |
           git clone --depth 1 https://github.com/suwa-sh/deepwiki-to-md.git .deepwiki-to-md
 
@@ -37,12 +37,19 @@ jobs:
         env:
           DEEPWIKI_URL: ${{ inputs.deepwiki_url || 'https://deepwiki.com/jadhavdurvesh/Maintain.ai.android' }}
         run: |
+          rm -rf export raw-deepwiki
           mkdir -p export
           docker run --rm --init --ipc=host \
             -v "$GITHUB_WORKSPACE/export:/output" \
+            -v "$GITHUB_WORKSPACE/scripts:/scripts:ro" \
+            --entrypoint python \
             local/deepwiki-to-md:latest \
-            wiki "$DEEPWIKI_URL" -o /output
+            /scripts/deepwiki_export.py "$DEEPWIKI_URL" -o /output
 
+          echo "Exported files:"
+          find export -type f -print | sort
+
+          test "$(find export -name '*.md' | wc -l)" -gt 1
           mkdir -p raw-deepwiki
           cp -R export/. raw-deepwiki/
 
@@ -60,6 +67,13 @@ jobs:
         run: |
           cd raw-deepwiki
           zip -r ../output/Maintain.ai-Android-Raw-Markdown.zip .
+
+      - name: Validate generated documentation
+        run: |
+          pdfinfo output/Maintain.ai-Android-Documentation.pdf | grep Pages
+          test "$(pdfinfo output/Maintain.ai-Android-Documentation.pdf | awk '/^Pages:/ {print $2}')" -gt 2
+          test -s output/Maintain.ai-Android-Documentation.pdf
+          test -s output/Maintain.ai-Android-Raw-Markdown.zip
 
       - name: Upload PDF and raw Markdown
         uses: actions/upload-artifact@v4
