@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y chromium zip
+          sudo apt-get install -y chromium zip poppler-utils
 
       - name: Checkout DeepWiki exporter runtime
         run: |
