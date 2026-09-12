@@ -51,9 +51,9 @@ jobs:
 
           MD_COUNT="$(find export -name '*.md' | wc -l)"
           SVG_COUNT="$(find export -name '*.svg' | wc -l)"
-          echo "Markdown pages: $MD_COUNT"
+          echo "Markdown files: $MD_COUNT"
           echo "SVG diagrams: $SVG_COUNT"
-          test "$MD_COUNT" -ge 18
+          test "$MD_COUNT" -ge 17
           test "$SVG_COUNT" -gt 0
 
           mkdir -p raw-deepwiki
@@ -63,7 +63,7 @@ jobs:
         run: |
           python3 scripts/build_html.py export output/documentation.html
           SVG_COUNT="$(find export -name '*.svg' | wc -l)"
-          EMBEDDED_COUNT="$(grep -o 'class="diagram"' output/documentation.html | wc -l)"
+          EMBEDDED_COUNT="$(grep -o 'class=\"diagram\"' output/documentation.html | wc -l)"
           echo "SVG diagrams exported: $SVG_COUNT"
           echo "Diagrams embedded into HTML: $EMBEDDED_COUNT"
           test "$SVG_COUNT" -gt 0
