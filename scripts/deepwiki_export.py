@@ -52,9 +52,6 @@ async def main():
         await page.goto(base_url, wait_until='domcontentloaded', timeout=120000)
         await page.wait_for_timeout(4000)
 
-        # Do not depend on DeepWiki's private CSS classes. Collect every
-        # same-origin link belonging to this repository, then filter out
-        # obvious UI/navigation links. This survives sidebar DOM changes.
         repo_prefix = parsed_base.path.rstrip('/') + '/'
         links = await page.locator('a[href]').evaluate_all(
             """els => els.map(a => ({href:a.href, title:(a.textContent||'').trim()}))
@@ -73,16 +70,21 @@ async def main():
                 continue
             if href in seen or not title:
                 continue
-            # Ignore share/edit/login/navigation actions that happen to link
-            # inside the same origin.
-            lowered = title.lower()
-            if lowered in {'edit wiki', 'share', 'sign in', 'login'}:
+            if title.lower() in {'edit wiki', 'share', 'sign in', 'login'}:
                 continue
             seen.add(href)
             unique.append({'href': href, 'title': title})
 
-        # Always keep the overview page first, even if its anchor text differs.
-        unique = [{'href': base_url, 'title': 'Overview'}] + [x for x in unique if x['href'] != base_url]
+        # The repository root and /1-overview are duplicate Overview pages.
+        has_child_overview = any(
+            x['href'].rstrip('/').endswith('/1-overview') for x in unique
+        )
+        if has_child_overview:
+            unique = [x for x in unique if x['href'] != base_url]
+        else:
+            unique = [{'href': base_url, 'title': 'Overview'}] + [
+                x for x in unique if x['href'] != base_url
+            ]
 
         print(f'Found {len(unique)} wiki page links')
         index = []
@@ -94,8 +96,6 @@ async def main():
             await page.goto(href, wait_until='domcontentloaded', timeout=120000)
             await page.wait_for_timeout(1800)
 
-            # Prefer a prose/article element, but fall back to main and choose
-            # the largest content-bearing element when the site changes layout.
             candidates = [
                 page.locator('[class*="prose"]').first,
                 page.locator('article').first,
@@ -118,21 +118,22 @@ async def main():
 
             html = await content.inner_html()
             soup = BeautifulSoup(html, 'html.parser')
-
-            # Remove page chrome that can appear inside <main>.
             for node in soup.select('nav, aside, header, footer'):
                 node.decompose()
             for node in soup.select('button, [role="button"]'):
                 node.decompose()
 
-            # Save rendered Mermaid SVGs as local assets and replace them with
-            # image elements so the later HTML/PDF stage renders them reliably.
+            # Export every rendered Mermaid SVG. Assets live in target_dir/images.
             svgs = soup.select('svg[id^="mermaid-"], svg[id*="mermaid"], svg.mermaid')
             for diagram_number, svg in enumerate(svgs, 1):
                 filename = f'{number:02d}-diagram-{diagram_number:02d}.svg'
                 (image_dir / filename).write_text(str(svg), encoding='utf-8')
                 replacement = soup.new_tag('p')
-                image = soup.new_tag('img', src=f'images/{filename}', alt=f'Mermaid diagram {diagram_number}')
+                image = soup.new_tag(
+                    'img',
+                    src=f'images/{filename}',
+                    alt=f'Mermaid diagram {diagram_number}',
+                )
                 replacement.append(image)
                 parent = svg.find_parent('pre')
                 if parent:
@@ -160,7 +161,6 @@ async def main():
         readme.extend(f'- [{title}]({filename})' for title, filename in index)
         readme.append('')
         (target_dir / 'README.md').write_text('\n'.join(readme), encoding='utf-8')
-
         await browser.close()
 
     print(f'Exported {len(index)} pages to {target_dir}')
