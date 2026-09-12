@@ -5,149 +5,65 @@ import re
 import sys
 from pathlib import Path
 
+def asset_data_url(path: Path) -> str:
+    mime = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
+    data = base64.b64encode(path.read_bytes()).decode('ascii')
+    return f'data:{mime};base64,{data}'
 
-def local_asset_url(src: str, base: Path) -> str:
-    src = src.strip().strip('<>')
-    if src.startswith(("http://", "https://", "data:", "#")):
-        return src
-    path = (base / src).resolve()
+def embed_diagram(path: Path, alt: str) -> str:
     if not path.exists():
-        return src
-    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    data = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{data}"
+        return f'<p><strong>Missing diagram asset:</strong> {html.escape(path.name)}</p>'
+    return '<figure class="diagram"><img src="' + asset_data_url(path) + '" alt="' + html.escape(alt) + '"><figcaption>' + html.escape(alt) + '</figcaption></figure>'
 
-
-def embed_html_images(text: str, base: Path) -> str:
-    def repl(match):
-        prefix, src, suffix = match.group(1), match.group(2), match.group(3)
-        return f'{prefix}{html.escape(local_asset_url(src, base), quote=True)}{suffix}'
-
-    # DeepWiki's exporter can emit normal HTML <img> tags for Mermaid SVGs.
-    return re.sub(
-        r'(<img\b[^>]*?\bsrc=["\'])(.*?)(["\'])',
-        repl,
-        text,
-        flags=re.I,
-    )
-
-
-def md_to_html(text: str, base: Path) -> str:
-    text = re.sub(
-        r"```(?:[\w+-]*)\n(.*?)```",
-        lambda m: "<pre><code>" + html.escape(m.group(1)) + "</code></pre>",
-        text,
-        flags=re.S,
-    )
-
+def md_to_html(text: str, diagrams: list[Path]) -> str:
+    text = re.sub(r'```(?:[\\w+-]*)\\n(.*?)```', lambda m: '<pre><code>' + html.escape(m.group(1)) + '</code></pre>', text, flags=re.S)
     for n in range(6, 0, -1):
-        text = re.sub(rf"^({'#' * n}) (.*)$", rf"<h{n}>\2</h{n}>", text, flags=re.M)
-
-    def image(m):
-        alt = m.group(1)
-        src = local_asset_url(m.group(2), base)
-        return f'<img src="{html.escape(src, quote=True)}" alt="{html.escape(alt)}">'
-
-    text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", image, text)
-    text = embed_html_images(text, base)
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
-
-    out = []
-    in_list = False
-    for line in text.splitlines():
-        s = line.strip()
+        text = re.sub(rf"^({'#' * n}) (.*)$", rf'<h{n}>\\2</h{n}>', text, flags=re.M)
+    text = re.sub(r'\\[([^\\]]*)\\]\\(([^)]+)\\)', lambda m: '<img src="' + html.escape(m.group(2)) + '" alt="' + html.escape(m.group(1)) + '">', text)
+    text = re.sub(r'\\[([^\\]]+)\\]\\(([^)]+)\\)', r'<a href="\\2">\\1</a>', text)
+    out=[]
+    in_list=False
+    diagram_index=0
+    for raw in text.splitlines():
+        s=raw.strip()
         if not s:
-            if in_list:
-                out.append("</ul>")
-                in_list = False
+            if in_list: out.append('</ul>'); in_list=False
             continue
+        dm=re.match(r'^\\*{0,2}Diagram:\\s*(.*?)\\*{0,2}$', s, flags=re.I)
+        if dm:
+            if in_list: out.append('</ul>'); in_list=False
+            title=dm.group(1).strip('* ').strip()
+            out.append(f'<h3>Diagram: {html.escape(title)}</h3>')
+            if diagram_index < len(diagrams):
+                out.append(embed_diagram(diagrams[diagram_index], title or f'Mermaid diagram {diagram_index+1}'))
+                diagram_index += 1
+            continue
+        if s.startswith('- '):
+            if not in_list: out.append('<ul>'); in_list=True
+            out.append(f'<li>{s[2:]}</li>')
+        elif s.startswith('> '): out.append(f'<blockquote>{s[2:]}</blockquote>')
+        elif s.startswith('<'): out.append(s)
+        else: out.append(f'<p>{s}</p>')
+    if in_list: out.append('</ul>')
+    while diagram_index < len(diagrams):
+        out.append(embed_diagram(diagrams[diagram_index], f'Mermaid diagram {diagram_index+1}'))
+        diagram_index += 1
+    return '\n'.join(out)
 
-        if s.startswith("- "):
-            if not in_list:
-                out.append("<ul>")
-                in_list = True
-            out.append(f"<li>{s[2:]}</li>")
-        elif s.startswith("> "):
-            out.append(f"<blockquote>{s[2:]}</blockquote>")
-        elif s.startswith("<"):
-            out.append(s)
-        else:
-            out.append(f"<p>{s}</p>")
+def main():
+    if len(sys.argv)!=3: raise SystemExit('Usage: build_html.py <markdown_root> <output_html>')
+    root=Path(sys.argv[1]).resolve(); output=Path(sys.argv[2]).resolve(); output.parent.mkdir(parents=True,exist_ok=True)
+    files=sorted(root.rglob('*.md'))
+    if not files: raise SystemExit(f'No Markdown files found under {root}')
+    toc=[]; sections=[]
+    for i,path in enumerate(files,1):
+        title=path.stem.replace('-',' ').replace('_',' ').title(); prefix=path.stem.split('-',1)[0]
+        diagrams=sorted(path.parent.glob(f'{prefix}-diagram-*.svg'))
+        anchor=f'section-{i}'; toc.append(f'<li><a href="#{anchor}">{html.escape(title)}</a></li>')
+        sections.append(f'<section id="{anchor}"><h1>{html.escape(title)}</h1>{md_to_html(path.read_text(encoding="utf-8",errors="replace"),diagrams)}</section>')
+    total_diagrams=len(list(root.rglob('*.svg')))
+    doc='''<!doctype html><html><head><meta charset="utf-8"><title>Maintain.ai Android Documentation</title><style>@page{size:A4;margin:18mm 16mm}body{font-family:Arial,sans-serif;color:#202124;line-height:1.5;font-size:10.5pt}.cover{page-break-after:always;min-height:250mm;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}.cover h1{font-size:32pt}.cover h2{font-size:18pt;font-weight:normal;color:#666}.toc{page-break-after:always}section{page-break-before:always}section:first-of-type{page-break-before:auto}pre{background:#f4f4f4;padding:4mm;white-space:pre-wrap;overflow-wrap:anywhere;font-family:Consolas,monospace;font-size:8.5pt}.diagram{margin:6mm 0 8mm;text-align:center;page-break-inside:avoid}.diagram img{max-width:100%;height:auto;display:block;margin:0 auto}.diagram figcaption{margin-top:2mm;font-size:9pt;color:#666}h1{font-size:20pt;border-bottom:1px solid #ddd;padding-bottom:3mm}h2{font-size:16pt}h3{font-size:13pt}blockquote{border-left:3px solid #bbb;padding-left:4mm;color:#555}</style></head><body><div class="cover"><h1>Maintain.ai Android</h1><h2>Technical Documentation</h2><p>Generated from DeepWiki by WikiToDoc</p><p>Exported diagrams: ''' + str(total_diagrams) + '''</p></div><div class="toc"><h1>Table of Contents</h1><ol>''' + ''.join(toc) + '''</ol></div>''' + ''.join(sections) + '''</body></html>'''
+    output.write_text(doc,encoding='utf-8')
+    print(f'Built HTML from {len(files)} Markdown files and {total_diagrams} SVG diagrams: {output}')
 
-    if in_list:
-        out.append("</ul>")
-
-    return "\n".join(out)
-
-
-def main() -> None:
-    if len(sys.argv) != 3:
-        raise SystemExit("Usage: build_html.py <markdown_root> <output_html>")
-
-    root = Path(sys.argv[1]).resolve()
-    output = Path(sys.argv[2]).resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    files = sorted(root.rglob("*.md"))
-    if not files:
-        raise SystemExit(f"No Markdown files found under {root}")
-
-    toc = []
-    sections = []
-
-    for index, path in enumerate(files, 1):
-        title = path.stem.replace("-", " ").replace("_", " ").title()
-        content = path.read_text(encoding="utf-8", errors="replace")
-        anchor = f"section-{index}"
-        toc.append(f'<li><a href="#{anchor}">{html.escape(title)}</a></li>')
-        sections.append(
-            f'<section id="{anchor}">'
-            f"<h1>{html.escape(title)}</h1>"
-            f"{md_to_html(content, path.parent)}"
-            f"</section>"
-        )
-
-    doc = f"""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Maintain.ai Android Documentation</title>
-<style>
-@page {{ size: A4; margin: 18mm 16mm; }}
-body {{ font-family: Arial, sans-serif; color:#202124; line-height:1.5; font-size:10.5pt; }}
-.cover {{ page-break-after:always; min-height:250mm; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; }}
-.cover h1 {{ font-size:32pt; margin-bottom:8mm; }}
-.cover h2 {{ font-size:18pt; font-weight:normal; color:#666; }}
-.toc {{ page-break-after:always; }}
-section {{ page-break-before:always; }}
-section:first-of-type {{ page-break-before:auto; }}
-pre {{ background:#f4f4f4; padding:4mm; white-space:pre-wrap; overflow-wrap:anywhere; font-family:Consolas,monospace; font-size:8.5pt; }}
-img {{ max-width:100%; height:auto; display:block; margin:6mm auto; page-break-inside:avoid; }}
-svg {{ max-width:100%; height:auto; display:block; margin:6mm auto; page-break-inside:avoid; }}
-h1 {{ font-size:20pt; border-bottom:1px solid #ddd; padding-bottom:3mm; }}
-h2 {{ font-size:16pt; }}
-h3 {{ font-size:13pt; }}
-blockquote {{ border-left:3px solid #bbb; padding-left:4mm; color:#555; }}
-</style>
-</head>
-<body>
-<div class="cover">
-  <h1>Maintain.ai Android</h1>
-  <h2>Technical Documentation</h2>
-  <p>Generated from DeepWiki by WikiToDoc</p>
-</div>
-<div class="toc">
-  <h1>Table of Contents</h1>
-  <ol>{''.join(toc)}</ol>
-</div>
-{''.join(sections)}
-</body>
-</html>
-"""
-
-    output.write_text(doc, encoding="utf-8")
-    print(f"Built HTML from {len(files)} Markdown files: {output}")
-
-
-if __name__ == "__main__":
-    main()
+if __name__=='__main__': main()
