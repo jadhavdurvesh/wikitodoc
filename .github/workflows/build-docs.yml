@@ -49,21 +49,30 @@ jobs:
           echo "Exported files:"
           find export -type f -print | sort
 
-          test "$(find export -name '*.md' | wc -l)" -gt 1
-          test "$(find export -name '*.svg' | wc -l)" -gt 0
+          MD_COUNT="$(find export -name '*.md' | wc -l)"
+          SVG_COUNT="$(find export -name '*.svg' | wc -l)"
+          echo "Markdown pages: $MD_COUNT"
+          echo "SVG diagrams: $SVG_COUNT"
+          test "$MD_COUNT" -ge 18
+          test "$SVG_COUNT" -gt 0
+
           mkdir -p raw-deepwiki
           cp -R export/. raw-deepwiki/
 
       - name: Build documentation HTML
         run: |
           python3 scripts/build_html.py export output/documentation.html
-          test "$(find export -name '*.svg' | wc -l)" -gt 0
-          grep -q "data:image/svg+xml;base64" output/documentation.html
+          SVG_COUNT="$(find export -name '*.svg' | wc -l)"
+          EMBEDDED_COUNT="$(grep -o 'class="diagram"' output/documentation.html | wc -l)"
+          echo "SVG diagrams exported: $SVG_COUNT"
+          echo "Diagrams embedded into HTML: $EMBEDDED_COUNT"
+          test "$SVG_COUNT" -gt 0
+          test "$EMBEDDED_COUNT" -eq "$SVG_COUNT"
 
       - name: Build PDF
         run: |
           mkdir -p output
-          chromium --headless --no-sandbox --disable-gpu \
+          chromium --headless --no-sandbox --disable-gpu --allow-file-access-from-files \
             --print-to-pdf="output/Maintain.ai-Android-Documentation.pdf" \
             "file://$GITHUB_WORKSPACE/output/documentation.html"
 
@@ -75,7 +84,9 @@ jobs:
       - name: Validate generated documentation
         run: |
           pdfinfo output/Maintain.ai-Android-Documentation.pdf
-          test "$(pdfinfo output/Maintain.ai-Android-Documentation.pdf | awk '/^Pages:/ {print $2}')" -gt 2
+          PAGES="$(pdfinfo output/Maintain.ai-Android-Documentation.pdf | awk '/^Pages:/ {print $2}')"
+          echo "PDF pages: $PAGES"
+          test "$PAGES" -gt 2
           test -s output/Maintain.ai-Android-Documentation.pdf
           test -s output/Maintain.ai-Android-Raw-Markdown.zip
 
