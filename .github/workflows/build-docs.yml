@@ -1,0 +1,63 @@
+name: Build DeepWiki Documentation
+
+on:
+  workflow_dispatch:
+    inputs:
+      deepwiki_url:
+        description: DeepWiki repository URL
+        required: false
+        default: https://deepwiki.com/jadhavdurvesh/Maintain.ai.android
+  schedule:
+    - cron: '0 0 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium curl zip
+
+      - name: Download DeepWiki exporter
+        run: |
+          curl -L 'https://raw.githubusercontent.com/suwa-sh/deepwiki-to-md/refs/heads/main/bin/deepwiki-to-md' -o deepwiki-to-md
+          chmod +x deepwiki-to-md
+
+      - name: Export complete DeepWiki
+        env:
+          DEEPWIKI_URL: ${{ inputs.deepwiki_url || 'https://deepwiki.com/jadhavdurvesh/Maintain.ai.android' }}
+        run: |
+          ./deepwiki-to-md wiki "$DEEPWIKI_URL" -o export
+          mkdir -p raw-deepwiki
+          cp -R export/. raw-deepwiki/
+
+      - name: Build documentation HTML
+        run: python3 scripts/build_html.py export output/documentation.html
+
+      - name: Build PDF
+        run: |
+          mkdir -p output
+          chromium --headless --no-sandbox --disable-gpu \
+            --print-to-pdf="output/Maintain.ai-Android-Documentation.pdf" \
+            "file://$GITHUB_WORKSPACE/output/documentation.html"
+
+      - name: Package raw Markdown and assets
+        run: |
+          cd raw-deepwiki
+          zip -r ../output/Maintain.ai-Android-Raw-Markdown.zip .
+
+      - name: Upload PDF and raw Markdown
+        uses: actions/upload-artifact@v4
+        with:
+          name: Maintain.ai-Android-Documentation
+          path: |
+            output/Maintain.ai-Android-Documentation.pdf
+            output/Maintain.ai-Android-Raw-Markdown.zip
+          retention-days: 90
