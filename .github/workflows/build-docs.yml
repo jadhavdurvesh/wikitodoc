@@ -23,17 +23,24 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y chromium curl zip
+          sudo apt-get install -y chromium zip
+
+      - name: Checkout DeepWiki exporter
+        run: |
+          git clone --depth 1 https://github.com/suwa-sh/deepwiki-to-md.git .deepwiki-to-md
+
+      - name: Build native DeepWiki exporter image
+        run: |
+          docker build --platform linux/amd64 -t local/deepwiki-to-md:latest .deepwiki-to-md
 
       - name: Export complete DeepWiki
         env:
           DEEPWIKI_URL: ${{ inputs.deepwiki_url || 'https://deepwiki.com/jadhavdurvesh/Maintain.ai.android' }}
         run: |
           mkdir -p export
-          docker pull suwash/deepwiki-to-md:latest
           docker run --rm --init --ipc=host \
             -v "$GITHUB_WORKSPACE/export:/output" \
-            suwash/deepwiki-to-md:latest \
+            local/deepwiki-to-md:latest \
             wiki "$DEEPWIKI_URL" -o /output
 
           mkdir -p raw-deepwiki
