@@ -50,11 +50,15 @@ jobs:
           find export -type f -print | sort
 
           test "$(find export -name '*.md' | wc -l)" -gt 1
+          test "$(find export -name '*.svg' | wc -l)" -gt 0
           mkdir -p raw-deepwiki
           cp -R export/. raw-deepwiki/
 
       - name: Build documentation HTML
-        run: python3 scripts/build_html.py export output/documentation.html
+        run: |
+          python3 scripts/build_html.py export output/documentation.html
+          test "$(find export -name '*.svg' | wc -l)" -gt 0
+          grep -q "data:image/svg+xml;base64" output/documentation.html
 
       - name: Build PDF
         run: |
@@ -70,7 +74,7 @@ jobs:
 
       - name: Validate generated documentation
         run: |
-          pdfinfo output/Maintain.ai-Android-Documentation.pdf | grep Pages
+          pdfinfo output/Maintain.ai-Android-Documentation.pdf
           test "$(pdfinfo output/Maintain.ai-Android-Documentation.pdf | awk '/^Pages:/ {print $2}')" -gt 2
           test -s output/Maintain.ai-Android-Documentation.pdf
           test -s output/Maintain.ai-Android-Raw-Markdown.zip
