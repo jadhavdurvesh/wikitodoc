@@ -29,10 +29,12 @@ async def main():
     args = parser.parse_args()
 
     base_url = args.url.rstrip('/')
-    out = Path(args.output)
-    out.mkdir(parents=True, exist_ok=True)
+    parsed_base = urlparse(base_url)
+    parts = parsed_base.path.strip('/').split('/')
+    if len(parts) < 2:
+        raise RuntimeError(f'Expected DeepWiki repository URL, got: {base_url}')
 
-    parts = urlparse(base_url).path.strip('/').split('/')
+    out = Path(args.output)
     target_dir = out / 'wiki' / parts[0] / parts[1]
     target_dir.mkdir(parents=True, exist_ok=True)
     image_dir = target_dir / 'images'
@@ -48,63 +50,84 @@ async def main():
 
         print(f'Opening DeepWiki: {base_url}')
         await page.goto(base_url, wait_until='domcontentloaded', timeout=120000)
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(4000)
 
-        # DeepWiki's DOM has changed over time. Try the current sidebar first,
-        # then fall back to the repo-page navigation container.
-        links = await page.locator('.border-r-border ul li a').evaluate_all(
+        # Do not depend on DeepWiki's private CSS classes. Collect every
+        # same-origin link belonging to this repository, then filter out
+        # obvious UI/navigation links. This survives sidebar DOM changes.
+        repo_prefix = parsed_base.path.rstrip('/') + '/'
+        links = await page.locator('a[href]').evaluate_all(
             """els => els.map(a => ({href:a.href, title:(a.textContent||'').trim()}))
             .filter(x => x.href && x.title)"""
         )
-        if not links:
-            links = await page.locator('#codebase-wiki-repo-page a[href]').evaluate_all(
-                """els => els.map(a => ({href:a.href, title:(a.textContent||'').trim()}))
-                .filter(x => x.href && x.title)"""
-            )
 
-        origin = urlparse(base_url).netloc
         unique = []
         seen = set()
         for item in links:
             href = urljoin(base_url + '/', item['href']).split('#')[0]
-            if urlparse(href).netloc != origin or href in seen:
+            parsed = urlparse(href)
+            title = re.sub(r'\s+', ' ', item['title']).strip()
+            if parsed.netloc != parsed_base.netloc:
+                continue
+            if parsed.path != parsed_base.path and not parsed.path.startswith(repo_prefix):
+                continue
+            if href in seen or not title:
+                continue
+            # Ignore share/edit/login/navigation actions that happen to link
+            # inside the same origin.
+            lowered = title.lower()
+            if lowered in {'edit wiki', 'share', 'sign in', 'login'}:
                 continue
             seen.add(href)
-            unique.append({'href': href, 'title': item['title'].strip()})
+            unique.append({'href': href, 'title': title})
 
-        if not unique:
-            unique = [{'href': base_url, 'title': 'Overview'}]
+        # Always keep the overview page first, even if its anchor text differs.
+        unique = [{'href': base_url, 'title': 'Overview'}] + [x for x in unique if x['href'] != base_url]
 
-        print(f'Found {len(unique)} wiki pages')
+        print(f'Found {len(unique)} wiki page links')
         index = []
 
         for number, item in enumerate(unique, 1):
             href = item['href']
-            title = item['title']
-            print(f'[{number}/{len(unique)}] {title}')
+            fallback_title = item['title']
+            print(f'[{number}/{len(unique)}] {fallback_title} -> {href}')
             await page.goto(href, wait_until='domcontentloaded', timeout=120000)
             await page.wait_for_timeout(1800)
 
+            # Prefer a prose/article element, but fall back to main and choose
+            # the largest content-bearing element when the site changes layout.
             candidates = [
-                page.locator('.container > div:nth-child(2) .prose').first,
-                page.locator('.container > div:nth-child(2) .prose-custom').first,
+                page.locator('[class*="prose"]').first,
                 page.locator('article').first,
                 page.locator('main').first,
             ]
             content = None
             for candidate in candidates:
-                if await candidate.count():
+                if await candidate.count() and (await candidate.inner_text()).strip():
                     content = candidate
                     break
             if content is None:
                 raise RuntimeError(f'Could not find wiki content for {href}')
 
+            actual_title = fallback_title
+            h1 = page.locator('main h1, article h1, h1').first
+            if await h1.count():
+                candidate_title = (await h1.inner_text()).strip()
+                if candidate_title:
+                    actual_title = candidate_title
+
             html = await content.inner_html()
             soup = BeautifulSoup(html, 'html.parser')
 
+            # Remove page chrome that can appear inside <main>.
+            for node in soup.select('nav, aside, header, footer'):
+                node.decompose()
+            for node in soup.select('button, [role="button"]'):
+                node.decompose()
+
             # Save rendered Mermaid SVGs as local assets and replace them with
-            # normal image elements so the later HTML/PDF stage can render them.
-            svgs = soup.select('svg[id^="mermaid-"], svg[id*="mermaid"]')
+            # image elements so the later HTML/PDF stage renders them reliably.
+            svgs = soup.select('svg[id^="mermaid-"], svg[id*="mermaid"], svg.mermaid')
             for diagram_number, svg in enumerate(svgs, 1):
                 filename = f'{number:02d}-diagram-{diagram_number:02d}.svg'
                 (image_dir / filename).write_text(str(svg), encoding='utf-8')
@@ -117,17 +140,14 @@ async def main():
                 else:
                     svg.replace_with(image)
 
-            for node in soup.select('button, [role="button"]'):
-                node.decompose()
-
             markdown = clean_markdown(
                 md(str(soup), heading_style='ATX', bullets='-', code_language='')
             )
-            filename = f'{number:02d}-{slugify(title)}.md'
+            filename = f'{number:02d}-{slugify(actual_title)}.md'
             (target_dir / filename).write_text(
-                f'# {title}\n\n{markdown}', encoding='utf-8'
+                f'# {actual_title}\n\n{markdown}', encoding='utf-8'
             )
-            index.append((title, filename))
+            index.append((actual_title, filename))
 
         readme = [
             '# Maintain.ai Android — DeepWiki Export',
