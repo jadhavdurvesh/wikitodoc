@@ -25,6 +25,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y chromium curl zip
 
+      - name: Enable ARM64 container support
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Download DeepWiki exporter
         run: |
           curl -L 'https://raw.githubusercontent.com/suwa-sh/deepwiki-to-md/refs/heads/main/bin/deepwiki-to-md' -o deepwiki-to-md
@@ -33,6 +38,7 @@ jobs:
       - name: Export complete DeepWiki
         env:
           DEEPWIKI_URL: ${{ inputs.deepwiki_url || 'https://deepwiki.com/jadhavdurvesh/Maintain.ai.android' }}
+          DOCKER_DEFAULT_PLATFORM: linux/arm64
         run: |
           ./deepwiki-to-md wiki "$DEEPWIKI_URL" -o export
           mkdir -p raw-deepwiki
