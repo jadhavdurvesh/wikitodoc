@@ -11,15 +11,18 @@ HEADING_RE = [re.compile(rf"^({'#' * n}) (.*)$") for n in range(6, 0, -1)]
 DIAGRAM_RE = re.compile(r"^\*{0,2}Diagram:\s*(.*?)\*{0,2}$", re.I)
 FENCE_RE = re.compile(r'^\s*```')
 
+
 def asset_data_url(path):
     mime = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
     data = base64.b64encode(path.read_bytes()).decode('ascii')
     return f'data:{mime};base64,{data}'
 
+
 def embed_diagram(path, alt):
     if not path.exists():
         return f'<p><strong>Missing diagram asset:</strong> {html.escape(path.name)}</p>'
     return '<figure class="diagram"><img src="' + asset_data_url(path) + '" alt="' + html.escape(alt) + '"><figcaption>' + html.escape(alt) + '</figcaption></figure>'
+
 
 def md_to_html(text, diagrams):
     out=[]; in_code=False; code_lines=[]; in_list=False; diagram_index=0
@@ -32,11 +35,11 @@ def md_to_html(text, diagrams):
         if diagram_index < len(diagrams):
             out.append(embed_diagram(diagrams[diagram_index], title or f'Mermaid diagram {diagram_index+1}')); diagram_index += 1
     for raw in text.splitlines():
-        line=raw.rstrip('\\n')
+        line=raw.rstrip('\n')
         if FENCE_RE.match(line):
             close_list()
             if in_code:
-                out.append('<pre><code>'+html.escape('\\n'.join(code_lines))+'</code></pre>'); code_lines=[]; in_code=False
+                out.append('<pre><code>'+html.escape('\n'.join(code_lines))+'</code></pre>'); code_lines=[]; in_code=False
             else: in_code=True
             continue
         if in_code: code_lines.append(line); continue
@@ -47,7 +50,7 @@ def md_to_html(text, diagrams):
         matched=False
         for hr in HEADING_RE:
             hm=hr.match(s)
-            if hm: close_list(); out.append(f'<h{len(hm.group(1))}>{html.escape(hm.group(2))}</h{len(hm.group(1))}>'); matched=True; break
+            if hm: close_list(); level=len(hm.group(1)); out.append(f'<h{level}>{html.escape(hm.group(2))}</h{level}>'); matched=True; break
         if matched: continue
         if s.startswith('- '):
             if not in_list: out.append('<ul>'); in_list=True
@@ -56,11 +59,12 @@ def md_to_html(text, diagrams):
         if s.startswith('<img '): close_list(); out.append(s); continue
         if s.startswith('<'): close_list(); out.append(s); continue
         def image_repl(m): return f'<img src="{html.escape(m.group(2))}" alt="{html.escape(m.group(1))}">'
-        s=IMAGE_RE.sub(image_repl,s); s=LINK_RE.sub(r'<a href="\\2">\\1</a>',s); out.append(f'<p>{s}</p>')
+        s=IMAGE_RE.sub(image_repl,s); s=LINK_RE.sub(r'<a href="\2">\1</a>',s); out.append(f'<p>{s}</p>')
     close_list()
-    if in_code: out.append('<pre><code>'+html.escape('\\n'.join(code_lines))+'</code></pre>')
+    if in_code: out.append('<pre><code>'+html.escape('\n'.join(code_lines))+'</code></pre>')
     while diagram_index < len(diagrams): emit_diagram(f'Mermaid diagram {diagram_index+1}')
-    return '\\n'.join(out)
+    return '\n'.join(out)
+
 
 def main():
     if len(sys.argv)!=3: raise SystemExit('Usage: build_html.py <markdown_root> <output_html>')
@@ -69,7 +73,7 @@ def main():
     if not files: raise SystemExit(f'No Markdown files found under {root}')
     toc=[]; sections=[]
     for i,path in enumerate(files,1):
-        title=path.stem.replace('-',' ').replace('_',' ').title(); prefix=path.stem.split('-',1)[0]; diagrams=sorted(path.parent.glob(f'{prefix}-diagram-*.svg')); anchor=f'section-{i}'
+        title=path.stem.replace('-',' ').replace('_',' ').title(); prefix=path.stem.split('-',1)[0]; diagrams=sorted((path.parent/'images').glob(f'{prefix}-diagram-*.svg')); anchor=f'section-{i}'
         toc.append(f'<li><a href="#{anchor}">{html.escape(title)}</a></li>')
         sections.append(f'<section id="{anchor}"><h1>{html.escape(title)}</h1>{md_to_html(path.read_text(encoding="utf-8",errors="replace"),diagrams)}</section>')
     total_diagrams=len(list(root.rglob('*.svg')))
