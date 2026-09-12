@@ -7,18 +7,32 @@ from pathlib import Path
 
 
 def local_asset_url(src: str, base: Path) -> str:
-    if src.startswith(("http://", "https://", "data:")):
+    src = src.strip().strip('<>')
+    if src.startswith(("http://", "https://", "data:", "#")):
         return src
     path = (base / src).resolve()
     if not path.exists():
-        return path.as_uri()
+        return src
     mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     data = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{data}"
 
 
+def embed_html_images(text: str, base: Path) -> str:
+    def repl(match):
+        prefix, src, suffix = match.group(1), match.group(2), match.group(3)
+        return f'{prefix}{html.escape(local_asset_url(src, base), quote=True)}{suffix}'
+
+    # DeepWiki's exporter can emit normal HTML <img> tags for Mermaid SVGs.
+    return re.sub(
+        r'(<img\b[^>]*?\bsrc=["\'])(.*?)(["\'])',
+        repl,
+        text,
+        flags=re.I,
+    )
+
+
 def md_to_html(text: str, base: Path) -> str:
-    # Convert fenced code blocks first.
     text = re.sub(
         r"```(?:[\w+-]*)\n(.*?)```",
         lambda m: "<pre><code>" + html.escape(m.group(1)) + "</code></pre>",
@@ -26,18 +40,16 @@ def md_to_html(text: str, base: Path) -> str:
         flags=re.S,
     )
 
-    # Headings.
     for n in range(6, 0, -1):
         text = re.sub(rf"^({'#' * n}) (.*)$", rf"<h{n}>\2</h{n}>", text, flags=re.M)
 
-    # Local images are embedded directly into the HTML so Chromium cannot lose
-    # them when printing the file:// document to PDF.
     def image(m):
         alt = m.group(1)
         src = local_asset_url(m.group(2), base)
-        return f'<img src="{html.escape(src)}" alt="{html.escape(alt)}">'
+        return f'<img src="{html.escape(src, quote=True)}" alt="{html.escape(alt)}">'
 
-    text = re.sub(r"![([^\]]*)]\(([^)]+)\)", image, text)
+    text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", image, text)
+    text = embed_html_images(text, base)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
 
     out = []
@@ -87,7 +99,6 @@ def main() -> None:
         title = path.stem.replace("-", " ").replace("_", " ").title()
         content = path.read_text(encoding="utf-8", errors="replace")
         anchor = f"section-{index}"
-
         toc.append(f'<li><a href="#{anchor}">{html.escape(title)}</a></li>')
         sections.append(
             f'<section id="{anchor}">'
@@ -112,6 +123,7 @@ section {{ page-break-before:always; }}
 section:first-of-type {{ page-break-before:auto; }}
 pre {{ background:#f4f4f4; padding:4mm; white-space:pre-wrap; overflow-wrap:anywhere; font-family:Consolas,monospace; font-size:8.5pt; }}
 img {{ max-width:100%; height:auto; display:block; margin:6mm auto; page-break-inside:avoid; }}
+svg {{ max-width:100%; height:auto; display:block; margin:6mm auto; page-break-inside:avoid; }}
 h1 {{ font-size:20pt; border-bottom:1px solid #ddd; padding-bottom:3mm; }}
 h2 {{ font-size:16pt; }}
 h3 {{ font-size:13pt; }}
